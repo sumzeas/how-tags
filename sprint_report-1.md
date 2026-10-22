@@ -37,6 +37,7 @@ Here's what we'd like to improve:
    * Add missing documentation to code files
    * Spend more time with team discussing the project
    * Refine the user stories and functional requirements
+   * Take more screenshots of Kanban board progress
   
 Here are changes we plan to implement in the next sprint:
    * 3 set meeting time and dates
