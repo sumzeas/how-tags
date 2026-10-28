@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
-import { connection } from "next/server";
+import { cache } from "react";
 import { getUserStore } from "@/lib/users/db";
 import { UserProfile, type PublicProfile } from "@/lib/users/UserProfile";
 
@@ -29,17 +29,31 @@ export async function startSession(userId: string): Promise<void> {
   });
 }
 
-/** The signed-in user's public profile, or null. Reads cookies, so render it inside <Suspense>. */
-export async function getCurrentUser(): Promise<PublicProfile | null> {
+/**
+ * The signed-in user's public profile, or null. Reads cookies, so render it
+ * inside <Suspense>. Cached per request, so calling it from several
+ * components queries the database only once.
+ */
+export const getCurrentUser = cache(async (): Promise<PublicProfile | null> => {
   const token = (await cookies()).get(COOKIE_NAME)?.value;
   if (!token) return null;
-  // Session expiry depends on the current time, so this must run at request
-  // time, not during prerendering or prefetching.
-  await connection();
+  // No connection() or io() needed: cookies() above already keeps this out of
+  // prerendering, and the store checks expiry against SQLite's clock.
   const store = getUserStore();
-  const userId = store.findSessionUserId(hashToken(token), new Date().toISOString());
+  const userId = store.findSessionUserId(hashToken(token));
   if (!userId) return null;
   return UserProfile.findById(store, userId)?.toPublic() ?? null;
+});
+
+/**
+ * Deletes the session cookie if it no longer matches a live session (expired,
+ * or the account was deleted). A valid cookie is left alone, so linking here
+ * can't sign anyone out. Call only from a Server Action or Route Handler.
+ */
+export async function clearStaleSession(): Promise<void> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(COOKIE_NAME)?.value;
+  if (token && !(await getCurrentUser())) cookieStore.delete(COOKIE_NAME);
 }
 
 /** Signs the user out. Call only from a Server Action or Route Handler. */

@@ -17,7 +17,7 @@ export default function ProfilePage() {
 
 async function ProfileDetails() {
   const user = await getCurrentUser();
-  if (!user) redirect("/sign-in");
+  if (!user) redirect("/sign-in/clear-session");
 
   return (
     <>

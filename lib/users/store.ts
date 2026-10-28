@@ -33,9 +33,10 @@ export interface UserStore {
  * stored; the token itself lives in the user's cookie.
  */
 export interface SessionStore {
+  /** Also deletes any sessions that have already expired. */
   createSession(tokenHash: string, userId: string, expiresAt: string): void;
-  /** Returns the session's user id, or undefined if missing or expired at `now`. */
-  findSessionUserId(tokenHash: string, now: string): string | undefined;
+  /** Returns the session's user id, or undefined if missing or expired. */
+  findSessionUserId(tokenHash: string): string | undefined;
   deleteSession(tokenHash: string): void;
 }
 
@@ -57,7 +58,13 @@ const SCHEMA = `
     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at TEXT NOT NULL
   ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions (expires_at);
 `;
+
+// The current UTC time in the same format as Date.toISOString(), which is how
+// expires_at is stored, so the two compare correctly as strings.
+const SQL_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 interface UserRow {
   id: string;
@@ -135,15 +142,19 @@ export class SqliteUserStore implements UserStore, SessionStore {
   }
 
   createSession(tokenHash: string, userId: string, expiresAt: string): void {
+    // Sign-in is a good moment to clear out sessions nobody signed out of.
+    this.#db.prepare(`DELETE FROM sessions WHERE expires_at <= ${SQL_NOW}`).run();
     this.#db
       .prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)")
       .run(tokenHash, userId, expiresAt);
   }
 
-  findSessionUserId(tokenHash: string, now: string): string | undefined {
+  findSessionUserId(tokenHash: string): string | undefined {
+    // Compare against SQLite's clock so callers don't read the current time,
+    // which Next.js would otherwise need excluding from prerendering.
     const row = this.#db
-      .prepare("SELECT user_id FROM sessions WHERE token_hash = ? AND expires_at > ?")
-      .get(tokenHash, now) as { user_id: string } | undefined;
+      .prepare(`SELECT user_id FROM sessions WHERE token_hash = ? AND expires_at > ${SQL_NOW}`)
+      .get(tokenHash) as { user_id: string } | undefined;
     return row?.user_id;
   }
 
