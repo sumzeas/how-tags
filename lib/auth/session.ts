@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
+import { connection } from "next/server";
 import { getUserStore } from "@/lib/users/db";
 import { UserProfile, type PublicProfile } from "@/lib/users/UserProfile";
 
@@ -32,6 +33,9 @@ export async function startSession(userId: string): Promise<void> {
 export async function getCurrentUser(): Promise<PublicProfile | null> {
   const token = (await cookies()).get(COOKIE_NAME)?.value;
   if (!token) return null;
+  // Session expiry depends on the current time, so this must run at request
+  // time, not during prerendering or prefetching.
+  await connection();
   const store = getUserStore();
   const userId = store.findSessionUserId(hashToken(token), new Date().toISOString());
   if (!userId) return null;
