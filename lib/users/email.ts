@@ -20,6 +20,13 @@ export class InvalidEmailError extends Error {
   }
 }
 
+export class EmailTakenError extends Error {
+  constructor() {
+    super("An account with this email already exists.");
+    this.name = "EmailTakenError";
+  }
+}
+
 export function normalizeEmail(email: string): string {
   const normalized = email.trim().toLowerCase();
   if (normalized.length > EMAIL_MAX_LENGTH || !EMAIL_PATTERN.test(normalized)) {
