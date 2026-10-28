@@ -72,7 +72,8 @@ export class SqliteUserStore implements UserStore {
   constructor(file = path.join(process.cwd(), "data", "howtags.db")) {
     if (file !== ":memory:") mkdirSync(path.dirname(file), { recursive: true });
     this.#db = new DatabaseSync(file);
-    // Overwrite deleted rows with zeros so removed accounts don't linger on disk.
+    // Zero out deleted rows in the main database file. Old copies can still sit
+    // in the -wal file until a checkpoint overwrites them, and in any backups.
     this.#db.exec("PRAGMA secure_delete = ON;");
     this.#db.exec("PRAGMA journal_mode = WAL;");
     this.#db.exec(SCHEMA);
