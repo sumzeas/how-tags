@@ -2,6 +2,7 @@ import "server-only";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { EmailTakenError } from "./email";
 
 /** A user row exactly as stored. Never send this to the client. */
 export interface UserRecord {
@@ -27,12 +28,19 @@ export interface UserStore {
   delete(id: string): void;
 }
 
-export class EmailTakenError extends Error {
-  constructor() {
-    super("An account with this email already exists.");
-    this.name = "EmailTakenError";
-  }
+/**
+ * Persistence for sign-in sessions. Only a hash of each session token is
+ * stored; the token itself lives in the user's cookie.
+ */
+export interface SessionStore {
+  createSession(tokenHash: string, userId: string, expiresAt: string): void;
+  /** Returns the session's user id, or undefined if missing or expired at `now`. */
+  findSessionUserId(tokenHash: string, now: string): string | undefined;
+  deleteSession(tokenHash: string): void;
 }
+
+// Defined in email.ts so UserProfile can throw it without loading SQLite.
+export { EmailTakenError };
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS users (
@@ -42,6 +50,12 @@ const SCHEMA = `
     username      TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     created_at    TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL
   ) STRICT;
 `;
 
@@ -65,7 +79,7 @@ function toRecord(row: UserRow): UserRecord {
   };
 }
 
-export class SqliteUserStore implements UserStore {
+export class SqliteUserStore implements UserStore, SessionStore {
   readonly #db: DatabaseSync;
 
   /** `file` defaults to data/howtags.db; pass ":memory:" for tests. */
@@ -75,6 +89,8 @@ export class SqliteUserStore implements UserStore {
     // Overwrite deleted rows with zeros so removed accounts don't linger on disk.
     this.#db.exec("PRAGMA secure_delete = ON;");
     this.#db.exec("PRAGMA journal_mode = WAL;");
+    // Needed for ON DELETE CASCADE, so deleting a user ends their sessions.
+    this.#db.exec("PRAGMA foreign_keys = ON;");
     this.#db.exec(SCHEMA);
   }
 
@@ -115,6 +131,23 @@ export class SqliteUserStore implements UserStore {
 
   delete(id: string): void {
     this.#db.prepare("DELETE FROM users WHERE id = ?").run(id);
+  }
+
+  createSession(tokenHash: string, userId: string, expiresAt: string): void {
+    this.#db
+      .prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)")
+      .run(tokenHash, userId, expiresAt);
+  }
+
+  findSessionUserId(tokenHash: string, now: string): string | undefined {
+    const row = this.#db
+      .prepare("SELECT user_id FROM sessions WHERE token_hash = ? AND expires_at > ?")
+      .get(tokenHash, now) as { user_id: string } | undefined;
+    return row?.user_id;
+  }
+
+  deleteSession(tokenHash: string): void {
+    this.#db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(tokenHash);
   }
 
   close(): void {

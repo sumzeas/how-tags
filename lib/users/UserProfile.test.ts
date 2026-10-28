@@ -174,3 +174,49 @@ describe("handles", () => {
     expect(user.handle).toMatch(/^[a-z]+-[a-z]+-[a-z]+-\d{2}$/);
   });
 });
+
+describe("sign-up step 1 check", () => {
+  it("passes for a new email and valid password", () => {
+    expect(() => UserProfile.checkSignUp(store, EMAIL, PASSWORD)).not.toThrow();
+  });
+
+  it("rejects an email that's already registered, in any letter case", async () => {
+    await signUp();
+    expect(() => UserProfile.checkSignUp(store, "SAM.EXAMPLE@mail.com", PASSWORD)).toThrow(
+      EmailTakenError,
+    );
+  });
+
+  it("rejects invalid input", () => {
+    expect(() => UserProfile.checkSignUp(store, "bad", PASSWORD)).toThrow(InvalidEmailError);
+    expect(() => UserProfile.checkSignUp(store, EMAIL, "short")).toThrow(InvalidPasswordError);
+  });
+});
+
+describe("sessions", () => {
+  const LATER = "2999-01-01T00:00:00.000Z";
+
+  it("finds the user for a live session and not for an expired one", async () => {
+    const user = await signUp();
+    store.createSession("live", user.id, LATER);
+    store.createSession("expired", user.id, "2000-01-01T00:00:00.000Z");
+    const now = new Date().toISOString();
+    expect(store.findSessionUserId("live", now)).toBe(user.id);
+    expect(store.findSessionUserId("expired", now)).toBeUndefined();
+    expect(store.findSessionUserId("unknown", now)).toBeUndefined();
+  });
+
+  it("ends a session when it's deleted", async () => {
+    const user = await signUp();
+    store.createSession("token", user.id, LATER);
+    store.deleteSession("token");
+    expect(store.findSessionUserId("token", new Date().toISOString())).toBeUndefined();
+  });
+
+  it("ends every session when the account is deleted", async () => {
+    const user = await signUp();
+    store.createSession("token", user.id, LATER);
+    await user.delete(store, PASSWORD);
+    expect(store.findSessionUserId("token", new Date().toISOString())).toBeUndefined();
+  });
+});
