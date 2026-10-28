@@ -2,6 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { InvalidEmailError } from "./email";
 import { generateHandle } from "./handle";
@@ -200,23 +201,46 @@ describe("sessions", () => {
     const user = await signUp();
     store.createSession("live", user.id, LATER);
     store.createSession("expired", user.id, "2000-01-01T00:00:00.000Z");
-    const now = new Date().toISOString();
-    expect(store.findSessionUserId("live", now)).toBe(user.id);
-    expect(store.findSessionUserId("expired", now)).toBeUndefined();
-    expect(store.findSessionUserId("unknown", now)).toBeUndefined();
+    expect(store.findSessionUserId("live")).toBe(user.id);
+    expect(store.findSessionUserId("expired")).toBeUndefined();
+    expect(store.findSessionUserId("unknown")).toBeUndefined();
+  });
+
+  it("compares expiry to the current time down to the second", async () => {
+    const user = await signUp();
+    store.createSession("soon", user.id, new Date(Date.now() + 60_000).toISOString());
+    store.createSession("just-gone", user.id, new Date(Date.now() - 1_000).toISOString());
+    expect(store.findSessionUserId("soon")).toBe(user.id);
+    expect(store.findSessionUserId("just-gone")).toBeUndefined();
+  });
+
+  it("deletes expired sessions when a new one starts", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "howtags-"));
+    const file = path.join(dir, "test.db");
+    const fileStore = new SqliteUserStore(file);
+    const user = await UserProfile.create(fileStore, { email: EMAIL, username: "Sam", password: PASSWORD });
+    fileStore.createSession("expired", user.id, "2000-01-01T00:00:00.000Z");
+    fileStore.createSession("live", user.id, LATER);
+
+    const db = new DatabaseSync(file);
+    const rows = db.prepare("SELECT token_hash FROM sessions").all();
+    db.close();
+    fileStore.close();
+    rmSync(dir, { recursive: true, force: true });
+    expect(rows).toEqual([{ token_hash: "live" }]);
   });
 
   it("ends a session when it's deleted", async () => {
     const user = await signUp();
     store.createSession("token", user.id, LATER);
     store.deleteSession("token");
-    expect(store.findSessionUserId("token", new Date().toISOString())).toBeUndefined();
+    expect(store.findSessionUserId("token")).toBeUndefined();
   });
 
   it("ends every session when the account is deleted", async () => {
     const user = await signUp();
     store.createSession("token", user.id, LATER);
     await user.delete(store, PASSWORD);
-    expect(store.findSessionUserId("token", new Date().toISOString())).toBeUndefined();
+    expect(store.findSessionUserId("token")).toBeUndefined();
   });
 });
