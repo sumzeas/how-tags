@@ -1,8 +1,8 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { emailLookupKey, InvalidEmailError } from "./email";
+import { EmailTakenError, emailLookupKey, InvalidEmailError } from "./email";
 import { generateHandle } from "./handle";
-import { getDummyHash, hashPassword, verifyPassword } from "./password";
+import { assertValidPassword, getDummyHash, hashPassword, verifyPassword } from "./password";
 import type { UserRecord, UserStore } from "./store";
 
 // Privacy model: each account stores only what's needed to tell users apart
@@ -84,6 +84,18 @@ export class UserProfile {
 
   get username(): string {
     return this.#username;
+  }
+
+  /**
+   * First sign-up step: checks the email and password before asking for a
+   * username. Throws InvalidEmailError, InvalidPasswordError, or
+   * EmailTakenError. create() re-checks everything, so this is only for
+   * early feedback. Note it reveals whether an email is registered.
+   */
+  static checkSignUp(store: UserStore, email: string, password: string): void {
+    const emailHmac = emailLookupKey(email);
+    assertValidPassword(password);
+    if (store.findByEmailHmac(emailHmac)) throw new EmailTakenError();
   }
 
   /** Throws InvalidEmailError, InvalidUsernameError, InvalidPasswordError, or EmailTakenError. */

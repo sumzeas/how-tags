@@ -24,6 +24,8 @@
 .DS_Store
 *.pem
 CLAUDE.local.md
+.claude/
+.vs/
 
 # debug
 npm-debug.log*

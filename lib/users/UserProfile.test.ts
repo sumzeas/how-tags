@@ -2,6 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { InvalidEmailError } from "./email";
 import { generateHandle } from "./handle";
@@ -172,5 +173,74 @@ describe("handles", () => {
     const user = await UserProfile.create(alwaysTaken, { email: EMAIL, username: "Sam", password: PASSWORD });
     expect(attempts).toBe(11);
     expect(user.handle).toMatch(/^[a-z]+-[a-z]+-[a-z]+-\d{2}$/);
+  });
+});
+
+describe("sign-up step 1 check", () => {
+  it("passes for a new email and valid password", () => {
+    expect(() => UserProfile.checkSignUp(store, EMAIL, PASSWORD)).not.toThrow();
+  });
+
+  it("rejects an email that's already registered, in any letter case", async () => {
+    await signUp();
+    expect(() => UserProfile.checkSignUp(store, "SAM.EXAMPLE@mail.com", PASSWORD)).toThrow(
+      EmailTakenError,
+    );
+  });
+
+  it("rejects invalid input", () => {
+    expect(() => UserProfile.checkSignUp(store, "bad", PASSWORD)).toThrow(InvalidEmailError);
+    expect(() => UserProfile.checkSignUp(store, EMAIL, "short")).toThrow(InvalidPasswordError);
+  });
+});
+
+describe("sessions", () => {
+  const LATER = "2999-01-01T00:00:00.000Z";
+
+  it("finds the user for a live session and not for an expired one", async () => {
+    const user = await signUp();
+    store.createSession("live", user.id, LATER);
+    store.createSession("expired", user.id, "2000-01-01T00:00:00.000Z");
+    expect(store.findSessionUserId("live")).toBe(user.id);
+    expect(store.findSessionUserId("expired")).toBeUndefined();
+    expect(store.findSessionUserId("unknown")).toBeUndefined();
+  });
+
+  it("compares expiry to the current time down to the second", async () => {
+    const user = await signUp();
+    store.createSession("soon", user.id, new Date(Date.now() + 60_000).toISOString());
+    store.createSession("just-gone", user.id, new Date(Date.now() - 1_000).toISOString());
+    expect(store.findSessionUserId("soon")).toBe(user.id);
+    expect(store.findSessionUserId("just-gone")).toBeUndefined();
+  });
+
+  it("deletes expired sessions when a new one starts", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "howtags-"));
+    const file = path.join(dir, "test.db");
+    const fileStore = new SqliteUserStore(file);
+    const user = await UserProfile.create(fileStore, { email: EMAIL, username: "Sam", password: PASSWORD });
+    fileStore.createSession("expired", user.id, "2000-01-01T00:00:00.000Z");
+    fileStore.createSession("live", user.id, LATER);
+
+    const db = new DatabaseSync(file);
+    const rows = db.prepare("SELECT token_hash FROM sessions").all();
+    db.close();
+    fileStore.close();
+    rmSync(dir, { recursive: true, force: true });
+    expect(rows).toEqual([{ token_hash: "live" }]);
+  });
+
+  it("ends a session when it's deleted", async () => {
+    const user = await signUp();
+    store.createSession("token", user.id, LATER);
+    store.deleteSession("token");
+    expect(store.findSessionUserId("token")).toBeUndefined();
+  });
+
+  it("ends every session when the account is deleted", async () => {
+    const user = await signUp();
+    store.createSession("token", user.id, LATER);
+    await user.delete(store, PASSWORD);
+    expect(store.findSessionUserId("token")).toBeUndefined();
   });
 });

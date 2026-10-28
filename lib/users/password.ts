@@ -2,8 +2,8 @@ import "server-only";
 import { randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 
 // scrypt parameters follow the OWASP Password Storage Cheat Sheet.
-// They are stored inside each hash so they can be raised later without
-// breaking existing accounts (re-hash on next successful sign-in).
+// They are stored inside each hash, so raising them later won't break
+// existing accounts. Re-hashing old hashes at sign-in isn't implemented yet.
 const N = 2 ** 17;
 const R = 8;
 const P = 1;
