@@ -23,15 +23,9 @@ function TagPill({ name, onRemove }: TagPillProps) {
     );
 }
 
-interface SearchBoxProps {
-    tagList: string[],
-}
-
-export function SearchBox({ tagList }: SearchBoxProps) {
+export function SearchBox() {
     const [tagText, setTagText] = useState('');
     const [tags, setTags] = useState<string[]>([]);
-    console.log(tagText);
-
     return (
         <div className="search-box-container">
             {tags.map((tag) => (
@@ -53,14 +47,14 @@ export function SearchBox({ tagList }: SearchBoxProps) {
                     if (e.key == ' ') {
                         e.preventDefault();
                         const trimmedTag = tagText.trim().toLowerCase();
-
-                        if (tagList.includes(trimmedTag) && !tags.includes(trimmedTag)) {
+                        if (!tags.includes(trimmedTag)) {
                             setTags([...tags, trimmedTag]);
                         }
-
                         setTagText('');
                     } else if (e.key === 'Backspace' && tagText === '' && tags.length > 0) {
                         setTags(tags.slice(0, -1));
+                    } else if (e.key === 'Enter' && tags.length > 0) {
+                        console.log("Enter pressed.")
                     }
                 }}
             />
