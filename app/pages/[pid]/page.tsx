@@ -1,4 +1,3 @@
-import { Suspense } from 'react';
 import ReactMarkdown from 'react-markdown';
 import pool from '@/lib/db';
 import { notFound } from 'next/navigation';
@@ -9,7 +8,6 @@ async function MarkdownContent({ pid }: { pid: string }) {
     let pageMd: string | undefined;
 
     try {
-        const queryText = 'SELECT markdown FROM pages WHERE pid = $1';
         const res = await pool.query(
             'SELECT markdown FROM pages WHERE pid = $1',
             [pid]
