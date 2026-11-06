@@ -1,4 +1,4 @@
-# Sprint 2 Tech Stack
+# Tech Stack
 - NextJS
 - React
 - React-markdown
