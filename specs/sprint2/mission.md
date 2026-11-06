@@ -1,0 +1,1 @@
+For sprint 2, the objective is to implement an operational search bar with a tag suggestion list that can redirect the user to a dedicated markdown page. Additionally, there will be a landing page for users to understand the mission of HowTags, how to contribute, and provide navigation options.
