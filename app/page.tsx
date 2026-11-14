@@ -1,16 +1,23 @@
 import Link from "next/link";
-import { SearchBox } from "./_components/SearchBox/SearchBox";
+import { Suspense } from "react";
+import { AuthNav, SignedOutLinks } from "./_components/AuthNav";
+import { HomeContent } from "./_components/HomeContent";
 
 export default function Home() {
   return (
     <>
-      <nav className="flex justify-end gap-4 p-4 text-sm">
-        <Link href="/sign-up" className="underline">Sign up</Link>
-        <Link href="/sign-in" className="underline">Sign in</Link>
-      </nav>
-      <SearchBox
-        tagList={["c", "cpp", "csharp", "html", "css", "nextjs", "cargo", "npm", "rust"]}
-      />
+      <header className="flex items-center justify-between p-4 text-sm">
+        <Link href="/" className="font-semibold">HowTags</Link>
+        <nav className="flex gap-4">
+          <Link href="/search" className="underline">Search</Link>
+          <Suspense fallback={<SignedOutLinks />}>
+            <AuthNav />
+          </Suspense>
+        </nav>
+      </header>
+      <main className="mx-auto w-full max-w-3xl px-4 py-12">
+        <HomeContent />
+      </main>
     </>
   );
 }

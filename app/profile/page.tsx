@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { getCurrentUser } from "@/lib/auth/session";
 import { signOut } from "./actions";
+import { DeleteAccountForm } from "./DeleteAccountForm";
 
 export default function ProfilePage() {
   return (
@@ -32,6 +33,7 @@ async function ProfileDetails() {
           Sign out
         </button>
       </form>
+      <DeleteAccountForm />
     </>
   );
 }

@@ -30,11 +30,11 @@ export async function startSession(userId: string): Promise<void> {
 }
 
 /**
- * The signed-in user's public profile, or null. Reads cookies, so render it
- * inside <Suspense>. Cached per request, so calling it from several
- * components queries the database only once.
+ * The signed-in account, or null. For Server Actions that change the account;
+ * pages should use getCurrentUser, which exposes only the public profile.
+ * Not cached, so it never returns an account deleted earlier in the request.
  */
-export const getCurrentUser = cache(async (): Promise<PublicProfile | null> => {
+export async function getSignedInUser(): Promise<UserProfile | null> {
   const token = (await cookies()).get(COOKIE_NAME)?.value;
   if (!token) return null;
   // No connection() or io() needed: cookies() above already keeps this out of
@@ -42,8 +42,17 @@ export const getCurrentUser = cache(async (): Promise<PublicProfile | null> => {
   const store = getUserStore();
   const userId = store.findSessionUserId(hashToken(token));
   if (!userId) return null;
-  return UserProfile.findById(store, userId)?.toPublic() ?? null;
-});
+  return UserProfile.findById(store, userId);
+}
+
+/**
+ * The signed-in user's public profile, or null. Reads cookies, so render it
+ * inside <Suspense>. Cached per request, so calling it from several
+ * components queries the database only once.
+ */
+export const getCurrentUser = cache(
+  async (): Promise<PublicProfile | null> => (await getSignedInUser())?.toPublic() ?? null,
+);
 
 /**
  * Deletes the session cookie if it no longer matches a live session (expired,
