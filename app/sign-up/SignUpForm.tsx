@@ -60,7 +60,7 @@ export function SignUpForm({ passwordMin, passwordMax }: SignUpFormProps) {
           <span id="username-hint" className="text-sm opacity-70">This name will be seen by others.</span>
         </div>
         {error && <p role="alert" className="text-red-600">{error}</p>}
-        <button type="submit" disabled={creating} className="rounded bg-black px-4 py-2 text-white disabled:opacity-50 dark:bg-white dark:text-black">
+        <button type="submit" disabled={creating} className="rounded bg-foreground px-4 py-2 text-background disabled:opacity-50">
           {creating ? "Creating account…" : "Create account"}
         </button>
         <button
@@ -129,7 +129,7 @@ export function SignUpForm({ passwordMin, passwordMax }: SignUpFormProps) {
         Show password
       </label>
       {error && <p role="alert" className="text-red-600">{error}</p>}
-      <button type="submit" disabled={checking} className="rounded bg-black px-4 py-2 text-white disabled:opacity-50 dark:bg-white dark:text-black">
+      <button type="submit" disabled={checking} className="rounded bg-foreground px-4 py-2 text-background disabled:opacity-50">
         {checking ? "Checking…" : "Continue"}
       </button>
       <p className="text-sm">

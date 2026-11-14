@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { EmailTakenError, emailLookupKey, InvalidEmailError } from "./email";
 import { generateHandle } from "./handle";
 import { assertValidPassword, getDummyHash, hashPassword, verifyPassword } from "./password";
-import type { UserRecord, UserStore } from "./store";
+import type { Role } from "./roles";
+import type { NewUserRecord, UserRecord, UserStore } from "./store";
 
 // Privacy model: each account stores only what's needed to tell users apart
 // and let them sign in.
@@ -12,6 +13,9 @@ import type { UserRecord, UserStore } from "./store";
 //   handle      generated public name, e.g. @brave-crimson-otter
 //   username    display name chosen by the user (not unique)
 //   password    scrypt hash, see password.ts
+//   role        "user", "moderator" or "admin" (public, shown as a badge);
+//               admin powers live in AdminProfile, not here
+//   canPost     per-user "Allow Posting" switch, see permissions.ts
 //
 // NOTE: The sign-up feature must tell users their email is never shared with
 // advertisers.
@@ -63,12 +67,17 @@ export function normalizeUsername(username: string): string {
 export interface PublicProfile {
   handle: string;
   username: string;
+  role: Role;
 }
 
 export class UserProfile {
   readonly id: string;
   readonly handle: string;
   readonly createdAt: string;
+  /** As loaded. Admin actions re-read it from the store before acting. */
+  readonly role: Role;
+  /** The per-user "Allow Posting" switch. Use canPost() in permissions.ts to check posting. */
+  readonly canPostFlag: boolean;
   #username: string;
   // Private fields are invisible to JSON.stringify, spread, and console.log.
   #passwordHash: string;
@@ -78,6 +87,8 @@ export class UserProfile {
     this.id = record.id;
     this.handle = record.handle;
     this.createdAt = record.createdAt;
+    this.role = record.role;
+    this.canPostFlag = record.canPost;
     this.#username = record.username;
     this.#passwordHash = record.passwordHash;
   }
@@ -108,7 +119,7 @@ export class UserProfile {
     const passwordHash = await hashPassword(input.password);
 
     for (let attempt = 0; attempt <= HANDLE_ATTEMPTS; attempt++) {
-      const record: UserRecord = {
+      const record: NewUserRecord = {
         id: randomUUID(),
         emailHmac,
         handle: generateHandle(attempt === HANDLE_ATTEMPTS),
@@ -116,7 +127,9 @@ export class UserProfile {
         passwordHash,
         createdAt: new Date().toISOString(),
       };
-      if (store.insert(record)) return new UserProfile(record);
+      // New accounts are always plain users; only an admin (or the make-admin
+      // script) can change that.
+      if (store.insert(record)) return new UserProfile({ ...record, role: "user", canPost: true });
     }
     throw new Error("Could not generate a unique handle.");
   }
@@ -144,6 +157,11 @@ export class UserProfile {
 
   static findById(store: UserStore, id: string): UserProfile | null {
     const record = store.findById(id);
+    return record ? new UserProfile(record) : null;
+  }
+
+  static findByHandle(store: UserStore, handle: string): UserProfile | null {
+    const record = store.findByHandle(handle);
     return record ? new UserProfile(record) : null;
   }
 
@@ -175,7 +193,7 @@ export class UserProfile {
 
   /** The only shape that should leave the server. */
   toPublic(): PublicProfile {
-    return { handle: this.handle, username: this.#username };
+    return { handle: this.handle, username: this.#username, role: this.role };
   }
 
   toJSON(): PublicProfile {

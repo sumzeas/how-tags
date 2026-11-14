@@ -1,6 +1,8 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { getCurrentUser } from "@/lib/auth/session";
+import { ROLE_LABELS } from "@/lib/users/roles";
 import { signOut } from "./actions";
 import { DeleteAccountForm } from "./DeleteAccountForm";
 
@@ -27,7 +29,12 @@ async function ProfileDetails() {
         <dd>{user.username}</dd>
         <dt className="font-medium">Handle</dt>
         <dd>@{user.handle}</dd>
+        <dt className="font-medium">Role</dt>
+        <dd>{ROLE_LABELS[user.role]}</dd>
       </dl>
+      <Link href={`/users/${user.handle}`} className="underline">
+        View your public page
+      </Link>
       <form action={signOut}>
         <button type="submit" className="rounded border px-4 py-2">
           Sign out

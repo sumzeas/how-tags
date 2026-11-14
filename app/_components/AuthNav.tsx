@@ -18,8 +18,13 @@ export async function AuthNav() {
   if (!user) return <SignedOutLinks />;
 
   return (
-    <Link href="/profile" className="underline">
-      <UserName user={user} />
-    </Link>
+    <>
+      {user.role === "admin" && (
+        <Link href="/admin/settings" className="underline">Admin</Link>
+      )}
+      <Link href="/profile" className="underline">
+        <UserName user={user} />
+      </Link>
+    </>
   );
 }

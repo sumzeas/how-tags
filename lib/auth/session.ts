@@ -1,11 +1,13 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
+import { forbidden, redirect } from "next/navigation";
 import { cache } from "react";
+import { AdminProfile } from "@/lib/users/AdminProfile";
 import { getUserStore } from "@/lib/users/db";
 import { UserProfile, type PublicProfile } from "@/lib/users/UserProfile";
 
-const COOKIE_NAME = "howtags_session";
+export const COOKIE_NAME = "howtags_session";
 const SESSION_SECONDS = 7 * 24 * 60 * 60;
 
 // The database keeps only this hash, so a leaked database file can't be used
@@ -35,14 +37,36 @@ export async function startSession(userId: string): Promise<void> {
  * Not cached, so it never returns an account deleted earlier in the request.
  */
 export async function getSignedInUser(): Promise<UserProfile | null> {
-  const token = (await cookies()).get(COOKIE_NAME)?.value;
-  if (!token) return null;
-  // No connection() or io() needed: cookies() above already keeps this out of
+  // No connection() or io() needed: cookies() already keeps this out of
   // prerendering, and the store checks expiry against SQLite's clock.
+  return findUserBySessionToken((await cookies()).get(COOKIE_NAME)?.value);
+}
+
+/**
+ * The account a raw session token belongs to, or null. For proxy.ts, which
+ * reads the cookie from the request instead of next/headers.
+ */
+export function findUserBySessionToken(token: string | undefined): UserProfile | null {
+  if (!token) return null;
   const store = getUserStore();
   const userId = store.findSessionUserId(hashToken(token));
-  if (!userId) return null;
-  return UserProfile.findById(store, userId);
+  return userId ? UserProfile.findById(store, userId) : null;
+}
+
+/**
+ * The signed-in admin. Redirects to /sign-in when signed out and shows the
+ * 403 page (forbidden()) for anyone else. Call it at the top of every admin
+ * page component and admin Server Action, and don't wrap it in try/catch.
+ */
+export async function requireAdmin(): Promise<AdminProfile> {
+  const user = await getSignedInUser();
+  if (!user) redirect("/sign-in");
+  return AdminProfile.from(user) ?? forbidden();
+}
+
+/** The signed-in admin, or null. For pages that only show extra controls to admins. */
+export async function getSignedInAdmin(): Promise<AdminProfile | null> {
+  return AdminProfile.from(await getSignedInUser());
 }
 
 /**
