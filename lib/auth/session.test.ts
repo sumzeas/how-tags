@@ -45,7 +45,7 @@ describe("getCurrentUser", () => {
 
   it("returns only the public profile for a live session", async () => {
     const user = await signedInUser();
-    expect(await getCurrentUser()).toEqual({ handle: user.handle, username: "Sam" });
+    expect(await getCurrentUser()).toEqual({ handle: user.handle, username: "Sam", role: "user" });
   });
 
   it("returns null after sign-out or account deletion", async () => {

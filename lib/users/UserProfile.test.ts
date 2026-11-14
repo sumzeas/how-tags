@@ -7,7 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { InvalidEmailError } from "./email";
 import { generateHandle } from "./handle";
 import { InvalidPasswordError } from "./password";
-import { EmailTakenError, SqliteUserStore, type UserRecord, type UserStore } from "./store";
+import { EmailTakenError, SqliteUserStore, type NewUserRecord, type UserStore } from "./store";
 import { IncorrectPasswordError, InvalidUsernameError, UserProfile } from "./UserProfile";
 import { ADJECTIVES, ANIMALS, COLORS } from "./wordlists";
 
@@ -105,9 +105,9 @@ describe("what gets stored", () => {
     expect(hashA).not.toBe(hashB);
   });
 
-  it("exposes only the handle and display name when serialized", async () => {
+  it("exposes only the handle, display name and role when serialized", async () => {
     const user = await signUp();
-    expect(JSON.parse(JSON.stringify(user))).toEqual({ handle: user.handle, username: "Sam" });
+    expect(JSON.parse(JSON.stringify(user))).toEqual({ handle: user.handle, username: "Sam", role: "user" });
     expect(Object.keys(user)).not.toContain("passwordHash");
   });
 });
@@ -162,14 +162,10 @@ describe("handles", () => {
 
   it("retries on collision and falls back to a numeric suffix", async () => {
     let attempts = 0;
-    const alwaysTaken: UserStore = {
-      insert: (record: UserRecord) => ++attempts > 10 && /-\d{2}$/.test(record.handle),
-      findByEmailHmac: () => undefined,
-      findById: () => undefined,
-      updateUsername: () => {},
-      updatePasswordHash: () => {},
-      delete: () => {},
-    };
+    // create() only ever calls insert().
+    const alwaysTaken = {
+      insert: (record: NewUserRecord) => ++attempts > 10 && /-\d{2}$/.test(record.handle),
+    } satisfies Partial<UserStore> as unknown as UserStore;
     const user = await UserProfile.create(alwaysTaken, { email: EMAIL, username: "Sam", password: PASSWORD });
     expect(attempts).toBe(11);
     expect(user.handle).toMatch(/^[a-z]+-[a-z]+-[a-z]+-\d{2}$/);

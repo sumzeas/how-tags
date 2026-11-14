@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { EmailTakenError } from "./email";
+import type { Role } from "./roles";
 
 /** A user row exactly as stored. Never send this to the client. */
 export interface UserRecord {
@@ -12,20 +13,73 @@ export interface UserRecord {
   username: string;
   passwordHash: string;
   createdAt: string;
+  role: Role;
+  /** Per-user "Allow Posting" switch, set by admins. */
+  canPost: boolean;
+}
+
+/** The fields a new account starts with; role and canPost take their defaults. */
+export type NewUserRecord = Omit<UserRecord, "role" | "canPost">;
+
+/** Site-wide switches, edited on /admin/settings. */
+export interface SiteSettings {
+  postingEnabled: boolean;
+}
+
+export type AuditAction = "role.change" | "permissions.change" | "settings.change";
+
+export interface NewAuditEntry {
+  /** null when the change came from the server itself (the make-admin script). */
+  actorId: string | null;
+  action: AuditAction;
+  targetId: string | null;
+  /** What changed, e.g. { from: "user", to: "admin" }. Stored as JSON. */
+  details: Record<string, unknown>;
+}
+
+export interface AuditEntry {
+  id: number;
+  action: AuditAction;
+  /** null for "system", or once the account has been deleted. */
+  actorId: string | null;
+  actorHandle: string | null;
+  targetId: string | null;
+  targetHandle: string | null;
+  details: Record<string, unknown>;
+  createdAt: string;
 }
 
 /**
- * Persistence for user accounts. UserProfile only talks to this interface,
- * so the backing database can change without touching the class.
+ * Persistence for user accounts, roles, site settings and the audit log.
+ * UserProfile and AdminProfile only talk to this interface, so the backing
+ * database can change without touching them.
  */
 export interface UserStore {
   /** Inserts a user. Returns false if `handle` is taken; throws EmailTakenError if `emailHmac` is. */
-  insert(user: UserRecord): boolean;
+  insert(user: NewUserRecord): boolean;
   findByEmailHmac(emailHmac: string): UserRecord | undefined;
   findById(id: string): UserRecord | undefined;
+  findByHandle(handle: string): UserRecord | undefined;
   updateUsername(id: string, username: string): void;
   updatePasswordHash(id: string, passwordHash: string): void;
   delete(id: string): void;
+
+  countAdmins(): number;
+  updateRole(id: string, role: Role): void;
+  updateCanPost(id: string, canPost: boolean): void;
+
+  getSiteSettings(): SiteSettings;
+  updateSiteSettings(settings: SiteSettings): void;
+
+  appendAudit(entry: NewAuditEntry): void;
+  /** Newest first. */
+  listAudit(limit: number): AuditEntry[];
+
+  /**
+   * Runs `fn` atomically: it either fully applies or (if it throws) not at
+   * all, and no other writer can change what it read in the meantime.
+   */
+  transaction<T>(fn: () => T): T;
 }
 
 /**
@@ -43,7 +97,10 @@ export interface SessionStore {
 // Defined in email.ts so UserProfile can throw it without loading SQLite.
 export { EmailTakenError };
 
-const SCHEMA = `
+// The original schema (user_version 0). Later changes go in MIGRATIONS so
+// existing databases get them too: CREATE TABLE IF NOT EXISTS never adds
+// columns to a table that already exists.
+const BASE_SCHEMA = `
   CREATE TABLE IF NOT EXISTS users (
     id            TEXT PRIMARY KEY,
     email_hmac    TEXT NOT NULL UNIQUE,
@@ -62,6 +119,36 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions (expires_at);
 `;
 
+/** MIGRATIONS[i] upgrades a database from user_version i to i + 1. */
+const MIGRATIONS = [
+  // 1: roles, per-user posting permission, site settings, audit log.
+  `
+  ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'
+    CHECK (role IN ('user', 'moderator', 'admin'));
+  ALTER TABLE users ADD COLUMN can_post INTEGER NOT NULL DEFAULT 1
+    CHECK (can_post IN (0, 1));
+  CREATE INDEX users_role ON users (role);
+
+  CREATE TABLE site_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  ) STRICT;
+  INSERT INTO site_settings (key, value) VALUES ('posting_enabled', '1');
+
+  -- Rows outlive the accounts they mention; a deleted account becomes NULL.
+  CREATE TABLE audit_log (
+    id         INTEGER PRIMARY KEY,
+    actor_id   TEXT REFERENCES users(id) ON DELETE SET NULL,
+    action     TEXT NOT NULL,
+    target_id  TEXT REFERENCES users(id) ON DELETE SET NULL,
+    details    TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX audit_log_actor_id ON audit_log (actor_id);
+  CREATE INDEX audit_log_target_id ON audit_log (target_id);
+  `,
+];
+
 // The current UTC time in the same format as Date.toISOString(), which is how
 // expires_at is stored, so the two compare correctly as strings.
 const SQL_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
@@ -73,6 +160,8 @@ interface UserRow {
   username: string;
   password_hash: string;
   created_at: string;
+  role: Role;
+  can_post: number;
 }
 
 function toRecord(row: UserRow): UserRecord {
@@ -83,7 +172,20 @@ function toRecord(row: UserRow): UserRecord {
     username: row.username,
     passwordHash: row.password_hash,
     createdAt: row.created_at,
+    role: row.role,
+    canPost: row.can_post === 1,
   };
+}
+
+interface AuditRow {
+  id: number;
+  action: AuditAction;
+  actor_id: string | null;
+  actor_handle: string | null;
+  target_id: string | null;
+  target_handle: string | null;
+  details: string;
+  created_at: string;
 }
 
 export class SqliteUserStore implements UserStore, SessionStore {
@@ -97,12 +199,30 @@ export class SqliteUserStore implements UserStore, SessionStore {
     // in the -wal file until a checkpoint overwrites them, and in any backups.
     this.#db.exec("PRAGMA secure_delete = ON;");
     this.#db.exec("PRAGMA journal_mode = WAL;");
-    // Needed for ON DELETE CASCADE, so deleting a user ends their sessions.
+    // Needed for ON DELETE CASCADE / SET NULL, so deleting a user ends their
+    // sessions and detaches their audit log rows.
     this.#db.exec("PRAGMA foreign_keys = ON;");
-    this.#db.exec(SCHEMA);
+    // Wait for another connection's write (the make-admin script, a second
+    // dev server) instead of failing at once with SQLITE_BUSY.
+    this.#db.exec("PRAGMA busy_timeout = 5000;");
+    this.#db.exec(BASE_SCHEMA);
+    this.#migrate();
   }
 
-  insert(user: UserRecord): boolean {
+  #migrate(): void {
+    const { user_version: version } = this.#db.prepare("PRAGMA user_version").get() as {
+      user_version: number;
+    };
+    for (let v = version; v < MIGRATIONS.length; v++) {
+      this.transaction(() => {
+        this.#db.exec(MIGRATIONS[v]);
+        // PRAGMA can't take a bound parameter; v is a loop index, not input.
+        this.#db.exec(`PRAGMA user_version = ${v + 1};`);
+      });
+    }
+  }
+
+  insert(user: NewUserRecord): boolean {
     try {
       this.#db
         .prepare(
@@ -129,6 +249,11 @@ export class SqliteUserStore implements UserStore, SessionStore {
     return row ? toRecord(row as unknown as UserRow) : undefined;
   }
 
+  findByHandle(handle: string): UserRecord | undefined {
+    const row = this.#db.prepare("SELECT * FROM users WHERE handle = ?").get(handle);
+    return row ? toRecord(row as unknown as UserRow) : undefined;
+  }
+
   updateUsername(id: string, username: string): void {
     this.#db.prepare("UPDATE users SET username = ? WHERE id = ?").run(username, id);
   }
@@ -139,6 +264,88 @@ export class SqliteUserStore implements UserStore, SessionStore {
 
   delete(id: string): void {
     this.#db.prepare("DELETE FROM users WHERE id = ?").run(id);
+  }
+
+  countAdmins(): number {
+    const row = this.#db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get() as {
+      n: number;
+    };
+    return row.n;
+  }
+
+  updateRole(id: string, role: Role): void {
+    this.#db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, id);
+  }
+
+  updateCanPost(id: string, canPost: boolean): void {
+    this.#db.prepare("UPDATE users SET can_post = ? WHERE id = ?").run(canPost ? 1 : 0, id);
+  }
+
+  getSiteSettings(): SiteSettings {
+    const rows = this.#db.prepare("SELECT key, value FROM site_settings").all() as unknown as {
+      key: string;
+      value: string;
+    }[];
+    const values = new Map(rows.map((r) => [r.key, r.value]));
+    // A missing row means the default (on), so a damaged table can't quietly
+    // switch posting off for everyone.
+    return { postingEnabled: values.get("posting_enabled") !== "0" };
+  }
+
+  updateSiteSettings(settings: SiteSettings): void {
+    this.#db
+      .prepare(
+        `INSERT INTO site_settings (key, value) VALUES ('posting_enabled', ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(settings.postingEnabled ? "1" : "0");
+  }
+
+  appendAudit(entry: NewAuditEntry): void {
+    this.#db
+      .prepare(
+        `INSERT INTO audit_log (actor_id, action, target_id, details, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(entry.actorId, entry.action, entry.targetId, JSON.stringify(entry.details), new Date().toISOString());
+  }
+
+  listAudit(limit: number): AuditEntry[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT a.id, a.action, a.actor_id, actor.handle AS actor_handle,
+                a.target_id, target.handle AS target_handle, a.details, a.created_at
+         FROM audit_log a
+         LEFT JOIN users actor ON actor.id = a.actor_id
+         LEFT JOIN users target ON target.id = a.target_id
+         ORDER BY a.id DESC
+         LIMIT ?`,
+      )
+      .all(limit) as unknown as AuditRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      actorId: row.actor_id,
+      actorHandle: row.actor_handle,
+      targetId: row.target_id,
+      targetHandle: row.target_handle,
+      details: JSON.parse(row.details) as Record<string, unknown>,
+      createdAt: row.created_at,
+    }));
+  }
+
+  transaction<T>(fn: () => T): T {
+    // IMMEDIATE takes the write lock up front, so two admins demoting each
+    // other at once run one after the other and the admin count stays right.
+    this.#db.exec("BEGIN IMMEDIATE;");
+    try {
+      const result = fn();
+      this.#db.exec("COMMIT;");
+      return result;
+    } catch (err) {
+      this.#db.exec("ROLLBACK;");
+      throw err;
+    }
   }
 
   createSession(tokenHash: string, userId: string, expiresAt: string): void {
