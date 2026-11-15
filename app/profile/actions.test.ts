@@ -1,6 +1,7 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { startSession } from "@/lib/auth/session";
+import type { Role } from "@/lib/users/roles";
 import { SqliteUserStore } from "@/lib/users/store";
 import { UserProfile } from "@/lib/users/UserProfile";
 
@@ -21,9 +22,13 @@ vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
     throw new Error(`redirect:${url}`);
   },
+  forbidden: () => {
+    throw new Error("forbidden");
+  },
 }));
+vi.mock("next/cache", () => ({ refresh: () => {} }));
 
-const { deleteAccount } = await import("./actions");
+const { deleteAccount, stepDownAsModerator } = await import("./actions");
 
 const EMAIL = "sam@mail.com";
 const PASSWORD = "correct horse battery";
@@ -87,5 +92,43 @@ describe("deleteAccount", () => {
     const user = await UserProfile.create(store, { email: EMAIL, username: "Sam", password: PASSWORD });
     await expect(submit({ password: PASSWORD })).rejects.toThrow("redirect:/sign-in/clear-session");
     expect(store.findById(user.id)).toBeDefined();
+  });
+});
+
+describe("stepDownAsModerator", () => {
+  // Inserts rows directly: these tests don't need a password.
+  function addUser(handle: string, role: Role): string {
+    const id = randomUUID();
+    store.insert({
+      id,
+      emailHmac: `hmac-${handle}`,
+      handle,
+      username: handle,
+      passwordHash: "unused",
+      createdAt: new Date().toISOString(),
+    });
+    if (role !== "user") store.updateRole(id, role);
+    return id;
+  }
+
+  it("makes the signed-in moderator a plain user", async () => {
+    await startSession(addUser("mod-bob", "moderator"));
+    await stepDownAsModerator();
+    expect(store.findByHandle("mod-bob")?.role).toBe("user");
+    expect(store.listAudit(1)[0]).toMatchObject({ actorHandle: "mod-bob", targetHandle: "mod-bob" });
+  });
+
+  it("forbids users and admins", async () => {
+    for (const role of ["user", "admin"] as const) {
+      jar.clear();
+      await startSession(addUser(`acting-${role}`, role));
+      await expect(stepDownAsModerator()).rejects.toThrow("forbidden");
+      expect(store.findByHandle(`acting-${role}`)?.role).toBe(role);
+    }
+    expect(store.listAudit(10)).toEqual([]);
+  });
+
+  it("sends signed-out visitors to sign in", async () => {
+    await expect(stepDownAsModerator()).rejects.toThrow("redirect:/sign-in/clear-session");
   });
 });

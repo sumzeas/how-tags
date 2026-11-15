@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { ROLE_LABELS } from "@/lib/users/roles";
 import { signOut } from "./actions";
 import { DeleteAccountForm } from "./DeleteAccountForm";
+import { StepDownForm } from "./StepDownForm";
 
 export default function ProfilePage() {
   return (
@@ -35,6 +36,12 @@ async function ProfileDetails() {
       <Link href={`/users/${user.handle}`} className="underline">
         View your public page
       </Link>
+      {(user.role === "moderator" || user.role === "admin") && (
+        <Link href="/moderation/log" className="underline">
+          Moderation log
+        </Link>
+      )}
+      {user.role === "moderator" && <StepDownForm />}
       <form action={signOut}>
         <button type="submit" className="rounded border px-4 py-2">
           Sign out

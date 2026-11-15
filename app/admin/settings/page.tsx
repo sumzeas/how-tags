@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { Suspense } from "react";
+import { Who } from "@/app/_components/Who";
 import { requireAdmin } from "@/lib/auth/session";
 import { getUserStore } from "@/lib/users/db";
 import type { AuditEntry } from "@/lib/users/store";
@@ -50,12 +50,6 @@ async function AdminSettings() {
   );
 }
 
-function Who({ handle, id }: { handle: string | null; id: string | null }) {
-  if (handle) return <Link href={`/users/${handle}`} className="underline">@{handle}</Link>;
-  // A null id with no handle means the server made the change (make-admin).
-  return <span className="italic">{id === null ? "system" : "[deleted user]"}</span>;
-}
-
 function AuditDescription({ entry }: { entry: AuditEntry }) {
   const actor = <Who handle={entry.actorHandle} id={entry.actorId} />;
   const target = <Who handle={entry.targetHandle} id={entry.targetId} />;
@@ -63,6 +57,10 @@ function AuditDescription({ entry }: { entry: AuditEntry }) {
 
   switch (entry.action) {
     case "role.change":
+      // A moderator removing their own role (ModeratorProfile.stepDown).
+      if (entry.actorId !== null && entry.actorId === entry.targetId) {
+        return <>{actor} stepped down from {String(d.from)} to {String(d.to)}</>;
+      }
       return <>{actor} changed {target}&apos;s role from {String(d.from)} to {String(d.to)}</>;
     case "permissions.change": {
       const to = (d.canPost as { to?: unknown } | undefined)?.to;

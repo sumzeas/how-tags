@@ -5,6 +5,7 @@ import { forbidden, redirect } from "next/navigation";
 import { cache } from "react";
 import { AdminProfile } from "@/lib/users/AdminProfile";
 import { getUserStore } from "@/lib/users/db";
+import { ModeratorProfile } from "@/lib/users/ModeratorProfile";
 import { UserProfile, type PublicProfile } from "@/lib/users/UserProfile";
 
 export const COOKIE_NAME = "howtags_session";
@@ -67,6 +68,21 @@ export async function requireAdmin(): Promise<AdminProfile> {
 /** The signed-in admin, or null. For pages that only show extra controls to admins. */
 export async function getSignedInAdmin(): Promise<AdminProfile | null> {
   return AdminProfile.from(await getSignedInUser());
+}
+
+/**
+ * The signed-in moderator or admin. Redirects and 403s like requireAdmin.
+ * Call it at the top of every moderation page and Server Action.
+ */
+export async function requireModerator(): Promise<ModeratorProfile> {
+  const user = await getSignedInUser();
+  if (!user) redirect("/sign-in");
+  return ModeratorProfile.from(user) ?? forbidden();
+}
+
+/** The signed-in moderator or admin, or null. For pages that only show moderation controls to them. */
+export async function getSignedInModerator(): Promise<ModeratorProfile | null> {
+  return ModeratorProfile.from(await getSignedInUser());
 }
 
 /**

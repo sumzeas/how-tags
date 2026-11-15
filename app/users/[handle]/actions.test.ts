@@ -88,6 +88,22 @@ describe("saveUserAdminSettings", () => {
     expect(store.listAudit(10)).toEqual([]);
   });
 
+  it("forbids a moderator from making anyone a moderator, themselves included", async () => {
+    addUser("user-charlie");
+    await startSession(addUser("mod-bob", "moderator"));
+    for (const target of ["user-charlie", "mod-bob"]) {
+      await expect(saveUserAdminSettings(target, {}, form({ role: "moderator", canPost: "on" }))).rejects.toThrow(
+        "forbidden",
+      );
+    }
+    await expect(saveUserAdminSettings("mod-bob", {}, form({ role: "admin", canPost: "on" }))).rejects.toThrow(
+      "forbidden",
+    );
+    expect(store.findByHandle("user-charlie")?.role).toBe("user");
+    expect(store.findByHandle("mod-bob")?.role).toBe("moderator");
+    expect(store.listAudit(10)).toEqual([]);
+  });
+
   it("sends signed-out visitors to sign in", async () => {
     addUser("reg-user");
     await expect(saveUserAdminSettings("reg-user", {}, form({ role: "admin" }))).rejects.toThrow("redirect:/sign-in");

@@ -2,6 +2,9 @@ import { Suspense } from 'react';
 import ReactMarkdown from 'react-markdown';
 import pool from '@/lib/db';
 import { notFound } from 'next/navigation';
+import { getSignedInModerator } from '@/lib/auth/session';
+import { getUserStore } from '@/lib/users/db';
+import { PostLockForm } from './PostLockForm';
 
 export const instant = false;
 
@@ -38,7 +41,31 @@ export default async function MarkdownPage({ params }: MarkdownPageProps) {
     return (
         <main>
             <h1>Page ID: {pid}</h1>
+            {/* Lock state and the moderator check are per request. */}
+            <Suspense fallback={null}>
+                <PostModeration pid={pid} />
+            </Suspense>
             <MarkdownContent pid={pid} />
         </main>
     );
+}
+
+async function PostModeration({ pid }: { pid: string }) {
+    const locked = Boolean(getUserStore().getPostLock(pid));
+    return (
+        <>
+            {locked && (
+                <p role="status" className="rounded border px-3 py-2">
+                    This post is locked. New replies are turned off.
+                </p>
+            )}
+            <ModeratorControls pid={pid} locked={locked} />
+        </>
+    );
+}
+
+async function ModeratorControls({ pid, locked }: { pid: string; locked: boolean }) {
+    // Only decides whether to show the form; the action re-checks with requireModerator().
+    if (!(await getSignedInModerator())) return null;
+    return <PostLockForm pid={pid} locked={locked} />;
 }

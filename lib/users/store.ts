@@ -82,6 +82,51 @@ export interface UserStore {
   transaction<T>(fn: () => T): T;
 }
 
+/** A post that moderators have locked against new replies. */
+export interface PostLock {
+  postId: string;
+  /** null once the moderator's account has been deleted. */
+  lockedById: string | null;
+  lockedAt: string;
+}
+
+export type ModerationAction = "post.lock" | "post.unlock";
+
+export interface NewModerationEntry {
+  actorId: string;
+  action: ModerationAction;
+  postId: string;
+  reason: string;
+}
+
+export interface ModerationEntry {
+  id: number;
+  action: ModerationAction;
+  /** null once the account has been deleted. */
+  actorId: string | null;
+  actorHandle: string | null;
+  postId: string;
+  reason: string;
+  createdAt: string;
+}
+
+/**
+ * Persistence for post locks and the moderation log. Kept apart from
+ * UserStore so content moderation can move to the posts database later.
+ */
+export interface ModerationStore {
+  getPostLock(postId: string): PostLock | undefined;
+  /** Locks the post as `lockedById`, or unlocks it when null. */
+  setPostLock(postId: string, lockedById: string | null): void;
+
+  appendModeration(entry: NewModerationEntry): void;
+  /** Newest first. */
+  listModeration(limit: number): ModerationEntry[];
+
+  /** See UserStore.transaction. */
+  transaction<T>(fn: () => T): T;
+}
+
 /**
  * Persistence for sign-in sessions. Only a hash of each session token is
  * stored; the token itself lives in the user's cookie.
@@ -147,6 +192,26 @@ const MIGRATIONS = [
   CREATE INDEX audit_log_actor_id ON audit_log (actor_id);
   CREATE INDEX audit_log_target_id ON audit_log (target_id);
   `,
+  // 2: post locks and the moderation log.
+  `
+  CREATE TABLE post_locks (
+    post_id      TEXT PRIMARY KEY,
+    locked_by_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    locked_at    TEXT NOT NULL
+  ) STRICT;
+
+  -- Like audit_log, rows outlive the moderator's account.
+  CREATE TABLE moderation_log (
+    id         INTEGER PRIMARY KEY,
+    actor_id   TEXT REFERENCES users(id) ON DELETE SET NULL,
+    action     TEXT NOT NULL,
+    post_id    TEXT NOT NULL,
+    reason     TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX moderation_log_actor_id ON moderation_log (actor_id);
+  CREATE INDEX moderation_log_post_id ON moderation_log (post_id);
+  `,
 ];
 
 // The current UTC time in the same format as Date.toISOString(), which is how
@@ -188,7 +253,17 @@ interface AuditRow {
   created_at: string;
 }
 
-export class SqliteUserStore implements UserStore, SessionStore {
+interface ModerationRow {
+  id: number;
+  action: ModerationAction;
+  actor_id: string | null;
+  actor_handle: string | null;
+  post_id: string;
+  reason: string;
+  created_at: string;
+}
+
+export class SqliteUserStore implements UserStore, SessionStore, ModerationStore {
   readonly #db: DatabaseSync;
 
   /** `file` defaults to data/howtags.db; pass ":memory:" for tests. */
@@ -330,6 +405,57 @@ export class SqliteUserStore implements UserStore, SessionStore {
       targetId: row.target_id,
       targetHandle: row.target_handle,
       details: JSON.parse(row.details) as Record<string, unknown>,
+      createdAt: row.created_at,
+    }));
+  }
+
+  getPostLock(postId: string): PostLock | undefined {
+    const row = this.#db
+      .prepare("SELECT post_id, locked_by_id, locked_at FROM post_locks WHERE post_id = ?")
+      .get(postId) as { post_id: string; locked_by_id: string | null; locked_at: string } | undefined;
+    return row ? { postId: row.post_id, lockedById: row.locked_by_id, lockedAt: row.locked_at } : undefined;
+  }
+
+  setPostLock(postId: string, lockedById: string | null): void {
+    if (lockedById === null) {
+      this.#db.prepare("DELETE FROM post_locks WHERE post_id = ?").run(postId);
+      return;
+    }
+    this.#db
+      .prepare(
+        `INSERT INTO post_locks (post_id, locked_by_id, locked_at) VALUES (?, ?, ?)
+         ON CONFLICT (post_id) DO UPDATE SET locked_by_id = excluded.locked_by_id, locked_at = excluded.locked_at`,
+      )
+      .run(postId, lockedById, new Date().toISOString());
+  }
+
+  appendModeration(entry: NewModerationEntry): void {
+    this.#db
+      .prepare(
+        `INSERT INTO moderation_log (actor_id, action, post_id, reason, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(entry.actorId, entry.action, entry.postId, entry.reason, new Date().toISOString());
+  }
+
+  listModeration(limit: number): ModerationEntry[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT m.id, m.action, m.actor_id, actor.handle AS actor_handle,
+                m.post_id, m.reason, m.created_at
+         FROM moderation_log m
+         LEFT JOIN users actor ON actor.id = m.actor_id
+         ORDER BY m.id DESC
+         LIMIT ?`,
+      )
+      .all(limit) as unknown as ModerationRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      actorId: row.actor_id,
+      actorHandle: row.actor_handle,
+      postId: row.post_id,
+      reason: row.reason,
       createdAt: row.created_at,
     }));
   }
